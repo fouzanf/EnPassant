@@ -1,0 +1,10 @@
+# Ignore backend environment secrets and caches
+backend/.env
+backend/__pycache__/
+backend/venv/
+
+# Ignore frontend dependencies and builds
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
