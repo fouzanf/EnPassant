@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import time
@@ -6,6 +6,7 @@ import os
 import re
 from dotenv import load_dotenv
 from google import genai
+import certifi
 # pyrefly: ignore [missing-import]
 from pymongo import MongoClient
 
@@ -16,7 +17,7 @@ mongo_uri = os.getenv("MONGO_URI")
 if not mongo_uri:
     raise RuntimeError("MONGO_URI environment variable is not set. Please add it to your .env file.")
 
-mongo_client = MongoClient(mongo_uri)
+mongo_client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
 db = mongo_client["enpassant"]
 metrics_collection = db["metrics_collection"]
 cache_collection = db["cache_collection"]
@@ -75,12 +76,12 @@ async def get_metrics():
     doc.pop("_id", None)
     return doc
 
-def get_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY")
+def get_gemini_client(client_api_key: str | None = None):
+    api_key = client_api_key or os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(
             status_code=500,
-            detail="Gemini API Key is not configured. Please create a .env file under /backend with GEMINI_API_KEY."
+            detail="Gemini API Key is not configured. Please create a .env file under /backend with GEMINI_API_KEY or provide it via the Authorization header."
         )
     try:
         return genai.Client(api_key=api_key)
@@ -104,8 +105,35 @@ def redact_pii(text: str) -> tuple[str, int, int, int]:
     
     return text, email_count, phone_count, cc_count
 
+# Simple in-memory rate limiting dictionary
+rate_limit_records = {}
+RATE_LIMIT_MAX_REQUESTS = 5
+RATE_LIMIT_WINDOW_SECONDS = 60
+
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatRequest):
+async def chat_completions(request: ChatRequest, request_obj: Request, authorization: str | None = Header(default=None)):
+    # Rate Limiter Logic
+    client_ip = request_obj.client.host if request_obj.client else "unknown"
+    current_time = time.time()
+    
+    timestamps = rate_limit_records.get(client_ip, [])
+    valid_timestamps = [ts for ts in timestamps if current_time - ts < RATE_LIMIT_WINDOW_SECONDS]
+    
+    if len(valid_timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+        
+    valid_timestamps.append(current_time)
+    rate_limit_records[client_ip] = valid_timestamps
+
+    # Parse client API key from Authorization header
+    client_api_key = None
+    if authorization:
+        parts = authorization.split()
+        if len(parts) > 1 and parts[0].lower() == "bearer":
+            client_api_key = parts[1]
+        else:
+            client_api_key = authorization.strip()
+
     # Scrub PII from the incoming prompt
     scrubbed_prompt, email_count, phone_count, cc_count = redact_pii(request.prompt)
     print(f"[PII REDACTED PROMPT]: {scrubbed_prompt}")
@@ -154,7 +182,7 @@ async def chat_completions(request: ChatRequest):
         }
 
     # Cache miss
-    client = get_gemini_client()
+    client = get_gemini_client(client_api_key)
     try:
         response = client.models.generate_content(
             model='gemini-2.5-flash',
