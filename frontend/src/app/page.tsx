@@ -25,7 +25,9 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const res = await fetch("http://localhost:8000/v1/metrics");
+        const NEXT_PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const res = await fetch(`${NEXT_PUBLIC_API_URL}/v1/metrics`);
+
         if (res.ok) {
           const data = await res.json();
           setLiveMetrics(data);
@@ -49,7 +51,8 @@ export default function Dashboard() {
     setResponse("");
 
     try {
-      const res = await fetch("http://localhost:8000/v1/chat/completions", {
+      const NEXT_PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${NEXT_PUBLIC_API_URL}/v1/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -65,7 +68,7 @@ export default function Dashboard() {
       const data = await res.json();
       setResponse(data.choices[0].message.content);
     } catch (err: any) {
-      setError(err.message || "Failed to connect to gateway. Ensure backend is running on http://localhost:8000.");
+      setError(err.message || "Failed to connect to gateway. Ensure backend is running.");
     } finally {
       setIsLoading(false);
     }
